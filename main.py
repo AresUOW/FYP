@@ -1,7 +1,9 @@
 from tensorflow import keras
+import joblib
 import pandas as pd
 import numpy as np
 from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import Pipeline
 import matplotlib.pyplot as plt
 import seaborn as sns
 from scipy.signal import butter, filtfilt
@@ -344,7 +346,7 @@ print("\nClassification Report:")
 int_to_label = {v: k for k, v in label_mapping.items()}
 unique_classes = sorted(np.unique(np.concatenate([y_test, predicted_labels])))
 label_names = [int_to_label.get(i, str(i)) for i in unique_classes]
-print(classification_report(y_test, predicted_labels, labels=unique_classes, target_names=label_names))
+print(classification_report(y_test, predicted_labels, labels=unique_classes, target_names=label_names, zero_division=0))
 
 # Plot Data
 train = all_features[:training_data_len]

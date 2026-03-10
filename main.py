@@ -14,7 +14,28 @@ os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"  # Suppress TensorFlow logging
 # Loading Data
 # -----------------------------
 Strong_Flex_CF = pd.read_csv("data/Strong_Flex_CF.csv")
-Strong_Flex_CF.head()
+Strong_Straight_CF = pd.read_csv("data/Strong_Straight_CF.csv")
+dataset = pd.concat([Strong_Flex_CF, Strong_Straight_CF], ignore_index=True)
+#Strong_Flex_CF.head()
+
+# Create label mapping function
+def map_labels_to_integers(labels):
+    """
+    Maps string labels to integers.
+    Returns the mapped labels and the label dictionary for reference.
+    """
+    unique_labels = labels.unique()
+    label_to_int = {label: idx for idx, label in enumerate(unique_labels)}
+    int_labels = labels.map(label_to_int)
+    
+    print("Label Mapping:")
+    for label, idx in label_to_int.items():
+        print(f"  {label} -> {idx}")
+    
+    return int_labels, label_to_int
+
+# Apply label mapping
+dataset['label'], label_mapping = map_labels_to_integers(dataset['label'])
 
 # -----------------------------
 # Filtering Parameters
@@ -25,6 +46,7 @@ highcut = 450
 
 # create bandpass filter
 b, a = butter(N=4, Wn=[lowcut, highcut], btype="band", fs=fs)
+
 
 # -----------------------------
 # Functions
@@ -50,7 +72,7 @@ def clean_data(data):
 # -----------------------------
 # Data Cleaning
 # -----------------------------
-cleaned_data_bicep, cleaned_data_tricep = clean_data(Strong_Flex_CF)
+cleaned_data_bicep, cleaned_data_tricep = clean_data(dataset)
 
 # -----------------------------
 # Parameters
@@ -68,7 +90,7 @@ print("Stride:", STRIDE)
 # Extract signals and labels
 signals_bicep = cleaned_data_bicep
 signals_tricep = cleaned_data_tricep
-labels = Strong_Flex_CF.label
+labels = dataset.label
 
 
 # -----------------------------
@@ -93,6 +115,7 @@ def create_windows(signals, labels, window_size, stride):
 
     return np.array(X), np.array(y)
 
+
 # Plot cleaned signals
 
 # Apply a moving average filter
@@ -103,9 +126,9 @@ bicep_smoothed = pd.Series(signals_bicep).rolling(window=window_size).mean()
 plt.figure(1)
 plt.clf()
 plt.plot(bicep_smoothed, label="Smoothed Bicep Signal")
-plt.title('Rectified Bicep Signal')
-plt.xlabel('x-axis (samples)')
-plt.ylabel('Amplitude')
+plt.title("Rectified Bicep Signal")
+plt.xlabel("x-axis (samples)")
+plt.ylabel("Amplitude")
 plt.grid(True)
 plt.show(block=False)
 
@@ -114,12 +137,11 @@ tricep_smoothed = pd.Series(signals_tricep).rolling(window=window_size).mean()
 plt.figure(2)
 plt.clf()
 plt.plot(tricep_smoothed, label="Smoothed Tricep Signal")
-plt.title('Rectified Tricep Signal')
-plt.xlabel('x-axis (samples)')
-plt.ylabel('Amplitude')
+plt.title("Rectified Tricep Signal")
+plt.xlabel("x-axis (samples)")
+plt.ylabel("Amplitude")
 plt.grid(True)
 plt.show(block=False)
-
 
 
 # -----------------------------
@@ -157,8 +179,7 @@ def wl(signal):
         return np.nan
     return np.sum(np.abs(np.diff(signal)))
 
-
-#def zc(signal, threshold=0):
+    # def zc(signal, threshold=0):
     """Calculates the number of Zero Crossings in a signal."""
     signal = signal[~np.isnan(signal)]  # Remove NaN values
     if len(signal) < 2:
@@ -191,12 +212,12 @@ for i in range(X_bicep.shape[0]):
         "RMS_1": rms(bicep_window_signal),
         "MAV_1": mav(bicep_window_signal),
         "WL_1": wl(bicep_window_signal),
-        #"ZC_1": zc(bicep_window_signal),
+        # "ZC_1": zc(bicep_window_signal),
         "SSC_1": ssc(bicep_window_signal),
         "RMS_2": rms(tricep_window_signal),
         "MAV_2": mav(tricep_window_signal),
         "WL_2": wl(tricep_window_signal),
-        #"ZC_2": zc(tricep_window_signal),
+        # "ZC_2": zc(tricep_window_signal),
         "SSC_2": ssc(tricep_window_signal),
     }
     all_features.append(features_dict)
@@ -206,8 +227,8 @@ features_df = pd.DataFrame(all_features)
 
 # Add the corresponding labels
 features_df["Label"] = y_bicep
-#print(y_bicep)
-#print(y_tricep)
+# print(y_bicep)
+# print(y_tricep)
 
 print(f"Generated features for {len(features_df)} windows.")
 print("First 5 rows of the features DataFrame:")
@@ -224,9 +245,120 @@ for i in range(0, 8):  # Loop through feature columns (excluding the label)
     features_df[feature_name] = scaler.fit_transform(
         features_df[[feature_name]]
     )  # Use double brackets to keep it as a DataFrame
-    
+
 features_df.to_csv("data/features_normalized.csv", index=False)
 
 # -----------------------------
 # Train-test split
 # -----------------------------
+
+# Prepare for the LSTM model
+training_data_len = int(len(features_df) * 0.8)
+
+# Preprocessing Stages
+scaler = StandardScaler()
+scaled_features = scaler.fit_transform(features_df.drop("Label", axis=1))
+
+training_data = scaled_features[
+    :training_data_len
+]  # Use the first 80% of the data for training
+test_data = scaled_features[training_data_len:]
+
+#print("Training data:", training_data)
+
+# Create a sliding window of 60 time steps for the LSTM input
+timesteps = 5
+X_train, y_train = [], []
+
+# Use y_bicep[:training_data_len] to get labels aligned with training_data
+training_labels = y_bicep[:training_data_len]
+#print("Training labels:", training_labels)
+print("Length of training data:", len(training_data))
+
+for i in range(len(training_data) - timesteps):
+    X_train.append(training_data[i:i + timesteps])
+    y_train.append(training_labels[i + timesteps])
+
+X_train = np.array(X_train)
+y_train = np.array(y_train)
+
+# One-hot encode labels for multi-class classification
+num_classes = len(label_mapping)
+y_train_encoded = keras.utils.to_categorical(y_train, num_classes=num_classes)
+
+print(f"Number of classes: {num_classes}")
+print(f"Shape of y_train_encoded: {y_train_encoded.shape}")
+
+# Building the Model
+model = keras.models.Sequential(
+    [
+        keras.layers.LSTM(64, return_sequences=True, input_shape=(X_train.shape[1], X_train.shape[2])),
+        keras.layers.LSTM(64, return_sequences=False),
+        keras.layers.Dense(128, activation="relu"),
+        keras.layers.Dropout(0.2),
+        keras.layers.Dense(num_classes, activation="softmax"),
+    ]
+)
+
+model.summary()
+model.compile(optimizer="adam", loss="categorical_crossentropy", metrics=[keras.metrics.Accuracy()])
+
+training = model.fit(X_train, y_train_encoded, batch_size=64, epochs=30, validation_split=0.2)
+
+# Prep the test data
+test_data = scaled_features[training_data_len:]
+test_labels = y_bicep[training_data_len:]
+
+X_test, y_test = [], []
+
+for i in range(len(test_data) - timesteps):
+    X_test.append(test_data[i:i + timesteps])
+    y_test.append(test_labels[i + timesteps])
+
+X_test = np.array(X_test)
+y_test = np.array(y_test)
+print("First 5 samples of X_test:")
+print(X_test[:5])
+print("Shape of X_test:", X_test.shape)
+print("Shape of y_test:", y_test.shape)
+print("Test labels:", y_test[:5])
+
+# Make a Prediction
+predictions = model.predict(X_test)
+print("Shape of predictions:", predictions.shape)
+print("First 5 raw predictions:\n", predictions[:5])
+
+# Convert probabilities to class labels using argmax
+predicted_labels = np.argmax(predictions, axis=1)
+print("\nFirst 5 predicted labels:", predicted_labels[:5])
+print("First 5 actual labels:", y_test[:5])
+
+# Calculate accuracy and other metrics
+from sklearn.metrics import accuracy_score, confusion_matrix, classification_report
+accuracy = accuracy_score(y_test, predicted_labels)
+print(f"\nTest Accuracy: {accuracy:.4f}")
+print("\nConfusion Matrix:")
+print(confusion_matrix(y_test, predicted_labels))
+print("\nClassification Report:")
+# Create reverse mapping for labels and get all unique classes
+int_to_label = {v: k for k, v in label_mapping.items()}
+unique_classes = sorted(np.unique(np.concatenate([y_test, predicted_labels])))
+label_names = [int_to_label.get(i, str(i)) for i in unique_classes]
+print(classification_report(y_test, predicted_labels, labels=unique_classes, target_names=label_names))
+
+# Plot Data
+train = all_features[:training_data_len]
+test = all_features[training_data_len:]
+
+test = test.copy()
+# test["Predictions"] = predictions
+
+# plt.figure(figsize=(12,8))
+# plt.plot(train['date'], train['label'], label="Train (Actual)", color='blue')
+# plt.plot(test['date'], test['label'], label="Test (Actual)", color='orange')
+# plt.plot(test['date'], test['Predictions'], label="Predictions", color='red')
+# plt.title("Our Stock Predictions")
+# plt.xlabel("Date")
+# plt.ylabel("Close Price")
+# plt.legend()
+# plt.show()

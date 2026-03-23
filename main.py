@@ -15,9 +15,13 @@ os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"  # Suppress TensorFlow logging
 # -----------------------------
 # Loading Data
 # -----------------------------
-Strong_Flex_CF = pd.read_csv("data/Strong_Flex_CF.csv")
-Strong_Straight_CF = pd.read_csv("data/Strong_Straight_CF.csv")
-dataset = pd.concat([Strong_Flex_CF, Strong_Straight_CF], ignore_index=True)
+#Strong_Flex_CF = pd.read_csv("data/Strong_Flex_CF.csv")
+#$Strong_Straight_CF = pd.read_csv("data/Strong_Straight_CF.csv")
+fist = pd.read_csv("data/fist.csv")
+flex = pd.read_csv("data/flex.csv")
+straight = pd.read_csv("data/straight.csv")
+dataset = pd.concat([fist, flex, straight], ignore_index=True)
+print(dataset.head())
 #Strong_Flex_CF.head()
 
 # Create label mapping function
@@ -75,6 +79,9 @@ def clean_data(data):
 # Data Cleaning
 # -----------------------------
 cleaned_data_bicep, cleaned_data_tricep = clean_data(dataset)
+print("Data cleaning completed.")
+print("First 5 samples of cleaned bicep data:", cleaned_data_bicep[:5])
+print("First 5 samples of cleaned tricep data:", cleaned_data_tricep[:5])
 
 # -----------------------------
 # Parameters
@@ -123,7 +130,7 @@ def create_windows(signals, labels, window_size, stride):
 # Apply a moving average filter
 window_size = 40  # Example window size, corresponds to 0.5 seconds at fs=200Hz
 
-bicep_smoothed = pd.Series(signals_bicep).rolling(window=window_size).mean()
+bicep_smoothed = pd.Series(signals_bicep).rolling(window=window_size).mean().dropna()
 
 plt.figure(1)
 plt.clf()
@@ -132,9 +139,9 @@ plt.title("Rectified Bicep Signal")
 plt.xlabel("x-axis (samples)")
 plt.ylabel("Amplitude")
 plt.grid(True)
-plt.show(block=False)
+plt.show(block=True)
 
-tricep_smoothed = pd.Series(signals_tricep).rolling(window=window_size).mean()
+tricep_smoothed = pd.Series(signals_tricep).rolling(window=window_size).mean().dropna()
 
 plt.figure(2)
 plt.clf()
@@ -143,7 +150,7 @@ plt.title("Rectified Tricep Signal")
 plt.xlabel("x-axis (samples)")
 plt.ylabel("Amplitude")
 plt.grid(True)
-plt.show(block=False)
+plt.show(block=True)
 
 
 # -----------------------------
@@ -216,11 +223,11 @@ for i in range(X_bicep.shape[0]):
         "WL_1": wl(bicep_window_signal),
         # "ZC_1": zc(bicep_window_signal),
         "SSC_1": ssc(bicep_window_signal),
-        "RMS_2": rms(tricep_window_signal),
-        "MAV_2": mav(tricep_window_signal),
-        "WL_2": wl(tricep_window_signal),
+        #"RMS_2": rms(tricep_window_signal),
+        #"MAV_2": mav(tricep_window_signal),
+        #"WL_2": wl(tricep_window_signal),
         # "ZC_2": zc(tricep_window_signal),
-        "SSC_2": ssc(tricep_window_signal),
+        #"SSC_2": ssc(tricep_window_signal),
     }
     all_features.append(features_dict)
 
@@ -241,7 +248,7 @@ features_df.to_csv("data/features.csv", index=False)
 # Normalization
 # -----------------------------
 
-for i in range(0, 8):  # Loop through feature columns (excluding the label)
+for i in range(0, 3):  # Loop through feature columns (excluding the label)
     feature_name = features_df.columns[i]
     scaler = StandardScaler()
     features_df[feature_name] = scaler.fit_transform(
@@ -305,7 +312,7 @@ model = keras.models.Sequential(
 model.summary()
 model.compile(optimizer="adam", loss="categorical_crossentropy", metrics=[keras.metrics.Accuracy()])
 
-training = model.fit(X_train, y_train_encoded, batch_size=64, epochs=30, validation_split=0.2)
+training = model.fit(X_train, y_train_encoded, batch_size=64, epochs=100, validation_split=0.2)
 
 # Prep the test data
 test_data = scaled_features[training_data_len:]
@@ -346,7 +353,94 @@ print("\nClassification Report:")
 int_to_label = {v: k for k, v in label_mapping.items()}
 unique_classes = sorted(np.unique(np.concatenate([y_test, predicted_labels])))
 label_names = [int_to_label.get(i, str(i)) for i in unique_classes]
-print(classification_report(y_test, predicted_labels, labels=unique_classes, target_names=label_names, zero_division=0))
+lstm_report = classification_report(y_test, predicted_labels, labels=unique_classes, target_names=label_names, zero_division=0)
+print(lstm_report)
+
+lstm_accuracy = accuracy
+
+
+# ========================================
+# SVM MODEL
+# ========================================
+print("\n" + "="*50)
+print("TRAINING SVM MODEL")
+print("="*50)
+
+from sklearn.svm import SVC
+
+# Use the full feature dataset for SVM (not windowed like LSTM)
+X_train_svm = scaled_features[:training_data_len]
+y_train_svm = y_bicep[:training_data_len]
+X_test_svm = scaled_features[training_data_len:]
+y_test_svm = y_bicep[training_data_len:]
+
+print(f"Training SVM with {len(X_train_svm)} samples...")
+svm_model = SVC(kernel='rbf', C=1.0, gamma='scale', verbose=1)
+svm_model.fit(X_train_svm, y_train_svm)
+
+svm_predictions = svm_model.predict(X_test_svm)
+svm_accuracy = accuracy_score(y_test_svm, svm_predictions)
+print(f"\nSVM Test Accuracy: {svm_accuracy:.4f}")
+print("\nSVM Confusion Matrix:")
+print(confusion_matrix(y_test_svm, svm_predictions))
+print("\nSVM Classification Report:")
+svm_report = classification_report(y_test_svm, svm_predictions, labels=unique_classes, target_names=label_names, zero_division=0)
+print(svm_report)
+
+
+# ========================================
+# RANDOM FOREST MODEL
+# ========================================
+print("\n" + "="*50)
+print("TRAINING RANDOM FOREST MODEL")
+print("="*50)
+
+from sklearn.ensemble import RandomForestClassifier
+
+print(f"Training Random Forest with {len(X_train_svm)} samples...")
+rf_model = RandomForestClassifier(n_estimators=100, max_depth=20, random_state=42, verbose=1, n_jobs=-1)
+rf_model.fit(X_train_svm, y_train_svm)
+
+rf_predictions = rf_model.predict(X_test_svm)
+rf_accuracy = accuracy_score(y_test_svm, rf_predictions)
+print(f"\nRandom Forest Test Accuracy: {rf_accuracy:.4f}")
+print("\nRandom Forest Confusion Matrix:")
+print(confusion_matrix(y_test_svm, rf_predictions))
+print("\nRandom Forest Classification Report:")
+rf_report = classification_report(y_test_svm, rf_predictions, labels=unique_classes, target_names=label_names, zero_division=0)
+print(rf_report)
+
+
+# ========================================
+# MODEL COMPARISON
+# ========================================
+print("\n" + "="*50)
+print("MODEL COMPARISON")
+print("="*50)
+
+comparison_data = {
+    'Model': ['LSTM', 'SVM', 'Random Forest'],
+    'Accuracy': [lstm_accuracy, svm_accuracy, rf_accuracy]
+}
+comparison_df = pd.DataFrame(comparison_data)
+print("\n" + comparison_df.to_string(index=False))
+
+# Find best model
+best_model_name = comparison_df.loc[comparison_df['Accuracy'].idxmax(), 'Model']
+best_accuracy = comparison_df['Accuracy'].max()
+print(f"\nBest Model: {best_model_name} with accuracy {best_accuracy:.4f}")
+
+# Plot accuracy comparison
+plt.figure(figsize=(10, 6))
+plt.bar(comparison_df['Model'], comparison_df['Accuracy'], color=['blue', 'green', 'orange'])
+plt.title('Model Accuracy Comparison')
+plt.ylabel('Accuracy')
+plt.xlabel('Model')
+plt.ylim([0, 1])
+for i, v in enumerate(comparison_df['Accuracy']):
+    plt.text(i, v + 0.02, f'{v:.4f}', ha='center', fontweight='bold')
+plt.grid(True, alpha=0.3)
+plt.show(block=False)
 
 # Plot Data
 train = all_features[:training_data_len]
